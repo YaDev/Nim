@@ -27,14 +27,14 @@ new line after - @['a']
 finalizer
 aaaaa
 hello
-ok
 true
 copying
 123
 42
-closed
+ok
 destroying variable: 20
 destroying variable: 10
+closed
 '''
   cmd: "nim c --gc:arc --deepcopy:on -d:nimAllocPagesViaMalloc $file"
 """
@@ -558,3 +558,159 @@ block:
     doAssert y.id == 778
     doAssert x[].id == 778
   main()
+
+block: # bug #19857
+  type
+    ValueKind = enum VNull, VFloat, VObject # need 3 elements. Cannot remove VNull or VObject
+
+    Value = object
+      case kind: ValueKind
+      of VFloat: fnum: float
+      of VObject: tab: Table[int, int] # OrderedTable[T, U] also makes it fail.
+                                      # "simpler" types also work though
+      else: discard # VNull can be like this, but VObject must be filled
+
+    # required. Pure proc works
+    FormulaNode = proc(c: OrderedTable[string, int]): Value
+
+  proc toF(v: Value): float =
+    doAssert v.kind == VFloat
+    case v.kind
+    of VFloat: result = v.fnum
+    else: discard
+
+
+  proc foo() =
+    let fuck = initOrderedTable[string, int]()
+    proc cb(fuck: OrderedTable[string, int]): Value =
+                            # works:
+                            #result = Value(kind: VFloat, fnum: fuck["field_that_does_not_exist"].float)
+                            # broken:
+      discard "actuall runs!"
+      let t = fuck["field_that_does_not_exist"]
+      echo "never runs, but we crash after! ", t
+
+    doAssertRaises(KeyError):
+      let fn = FormulaNode(cb)
+      let v = fn(fuck)
+      #echo v
+      let res = v.toF()
+
+  foo()
+
+import std/options
+
+# bug #21592
+type Event* = object
+  code*: string
+
+type App* = ref object of RootObj
+  id*: string
+
+method process*(self: App): Option[Event] {.base.} =
+  raise Exception.new_exception("not impl")
+
+# bug #21617
+type Test2 = ref object of RootObj
+
+method bug(t: Test2): seq[float] {.base.} = discard
+
+block: # bug #22664
+  type
+    ElementKind = enum String, Number
+    Element = object
+      case kind: ElementKind
+      of String:
+        str: string
+      of Number:
+        num: float
+    Calc = ref object
+      stack: seq[Element]
+
+  var calc = new Calc
+
+  calc.stack.add Element(kind: Number, num: 200.0)
+  doAssert $calc.stack == "@[(kind: Number, num: 200.0)]"
+  let calc2 = calc
+  calc2.stack = calc.stack # This nulls out the object in the stack
+  doAssert $calc.stack == "@[(kind: Number, num: 200.0)]"
+  doAssert $calc2.stack == "@[(kind: Number, num: 200.0)]"
+
+block: # bug #19250
+  type
+    Bar[T] = object
+      err: proc(): string
+
+    Foo[T] = object
+      run: proc(): Bar[T]
+
+  proc bar[T](err: proc(): string): Bar[T] =
+    assert not err.isNil
+    Bar[T](err: err)
+
+  proc foo(): Foo[char] = 
+    result.run = proc(): Bar[char] =
+      # works
+      # result = Bar[char](err: proc(): string = "x")
+      # not work
+      result = bar[char](proc(): string = "x")
+
+  proc bug[T](fs: Foo[T]): Foo[T] =
+    result.run = proc(): Bar[T] =
+      let res = fs.run()
+      
+      # works
+      # var errors = @[res.err] 
+      
+      # not work
+      var errors: seq[proc(): string]
+      errors.add res.err
+      
+      return bar[T] do () -> string:
+        for err in errors:
+          result.add res.err()
+
+  doAssert bug(foo()).run().err() == "x"
+
+block: # bug #22259
+  type
+    ProcWrapper = tuple
+      p: proc() {.closure.}
+
+
+  proc f(wrapper: ProcWrapper) =
+    let s = @[wrapper.p]
+    let a = [wrapper.p]
+
+  proc main =
+    # let wrapper: ProcWrapper = ProcWrapper(p: proc {.closure.} = echo 10)
+    let wrapper: ProcWrapper = (p: proc {.closure.} = echo 10)
+    f(wrapper)
+
+  main()
+
+block:
+  block: # bug #22923
+    block:
+      let
+        a: int = 100
+        b: int32 = 200'i32
+
+      let
+        x = arrayWith(a, 8) # compiles
+        y = arrayWith(b, 8) # internal error
+        z = arrayWith(14, 8) # integer literal also results in a crash
+
+      doAssert x == [100, 100, 100, 100, 100, 100, 100, 100]
+      doAssert $y == "[200, 200, 200, 200, 200, 200, 200, 200]"
+      doAssert z == [14, 14, 14, 14, 14, 14, 14, 14]
+
+    block:
+      let a: string = "nim"
+      doAssert arrayWith(a, 3) == ["nim", "nim", "nim"]
+
+      let b: char = 'c'
+      doAssert arrayWith(b, 3) == ['c', 'c', 'c']
+
+      let c: uint = 300'u
+      doAssert $arrayWith(c, 3) == "[300, 300, 300]"

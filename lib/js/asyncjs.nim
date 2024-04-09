@@ -90,6 +90,8 @@ proc replaceReturn(node: var NimNode) =
       node[z] = nnkReturnStmt.newTree(value)
     elif son.kind == nnkAsgn and son[0].kind == nnkIdent and $son[0] == "result":
       node[z] = nnkAsgn.newTree(son[0], nnkCall.newTree(jsResolve, son[1]))
+    elif son.kind in RoutineNodes:
+      discard
     else:
       replaceReturn(son)
     inc z
@@ -100,9 +102,17 @@ proc isFutureVoid(node: NimNode): bool =
            node[1].kind == nnkIdent and $node[1] == "void"
 
 proc generateJsasync(arg: NimNode): NimNode =
-  if arg.kind notin {nnkProcDef, nnkLambda, nnkMethodDef, nnkDo}:
+  if arg.kind notin {nnkProcDef, nnkLambda, nnkMethodDef, nnkDo, nnkProcTy}:
       error("Cannot transform this node kind into an async proc." &
             " proc/method definition or lambda node expected.")
+
+  # Transform type X = proc (): something {.async.}
+  # into      type X = proc (): Future[something]
+  if arg.kind == nnkProcTy:
+    result = arg
+    if arg[0][0].kind == nnkEmpty:
+      result[0][0] = quote do: Future[void]
+    return result
 
   result = arg
   var isVoid = false
@@ -233,7 +243,7 @@ since (1, 5, 1):
     else:
       type A = impl(onSuccess(default(T)))
     var ret: A
-    asm "`ret` = `future`.then(`onSuccess`, `onReject`)"
+    {.emit: "`ret` = `future`.then(`onSuccess`, `onReject`)".}
     return ret
 
   proc catch*[T](future: Future[T], onReject: OnReject): Future[void] =
@@ -256,4 +266,4 @@ since (1, 5, 1):
 
       discard main()
 
-    asm "`result` = `future`.catch(`onReject`)"
+    {.emit: "`result` = `future`.catch(`onReject`)".}

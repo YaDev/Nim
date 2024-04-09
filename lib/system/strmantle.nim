@@ -23,6 +23,14 @@ proc cmpStrings(a, b: string): int {.inline, compilerproc.} =
   else:
     result = alen - blen
 
+proc leStrings(a, b: string): bool {.inline, compilerproc.} =
+  # required by upcoming backends (NIR).
+  cmpStrings(a, b) <= 0
+
+proc ltStrings(a, b: string): bool {.inline, compilerproc.} =
+  # required by upcoming backends (NIR).
+  cmpStrings(a, b) < 0
+
 proc eqStrings(a, b: string): bool {.inline, compilerproc.} =
   let alen = a.len
   let blen = b.len
@@ -33,7 +41,7 @@ proc eqStrings(a, b: string): bool {.inline, compilerproc.} =
 proc hashString(s: string): int {.compilerproc.} =
   # the compiler needs exactly the same hash function!
   # this used to be used for efficient generation of string case statements
-  var h : uint = 0
+  var h = 0'u
   for i in 0..len(s)-1:
     h = h + uint(s[i])
     h = h + h shl 10
@@ -178,7 +186,9 @@ proc nimParseBiggestFloat(s: openArray[char], number: var BiggestFloat,
 
   # if exponent greater than can be represented: +/- zero or infinity
   if absExponent > 999:
-    if expNegative:
+    if integer == 0:
+      number = 0.0
+    elif expNegative:
       number = 0.0*sign
     else:
       number = Inf*sign

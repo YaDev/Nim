@@ -10,8 +10,10 @@
 ## This module contains the data structures for the C code generation phase.
 
 import
-  ast, ropes, options, intsets,
-  tables, ndi, lineinfos, pathutils, modulegraphs, sets
+  ast, ropes, options,
+  ndi, lineinfos, pathutils, modulegraphs
+
+import std/[intsets, tables, sets]
 
 type
   TLabel* = Rope              # for the C generator a label is just a rope
@@ -86,6 +88,7 @@ type
     options*: TOptions        # options that should be used for code
                               # generation; this is the same as prc.options
                               # unless prc == nil
+    optionsStack*: seq[TOptions]
     module*: BModule          # used to prevent excessive parameter passing
     withinLoop*: int          # > 0 if we are within a loop
     splitDecls*: int          # > 0 if we are in some context for C++ that
@@ -134,6 +137,7 @@ type
                             # unconditionally...
                             # nimtvDeps is VERY hard to cache because it's
                             # not a list of IDs nor can it be made to be one.
+    mangledPrcs*: HashSet[string]
 
   TCGen = object of PPassContext # represents a C source file
     s*: TCFileSections        # sections of the C file
@@ -147,7 +151,7 @@ type
     typeABICache*: HashSet[SigHash] # cache for ABI checks; reusing typeCache
                               # would be ideal but for some reason enums
                               # don't seem to get cached so it'd generate
-                              # 1 ABI check per occurence in code
+                              # 1 ABI check per occurrence in code
     forwTypeCache*: TypeCache # cache for forward declarations of types
     declaredThings*: IntSet   # things we have declared in this .c file
     declaredProtos*: IntSet   # prototypes we have declared in this .c file
@@ -172,6 +176,7 @@ type
 
 template config*(m: BModule): ConfigRef = m.g.config
 template config*(p: BProc): ConfigRef = p.module.g.config
+template vccAndC*(p: BProc): bool = p.module.config.cCompiler == ccVcc and p.module.config.backend == backendC
 
 proc includeHeader*(this: BModule; header: string) =
   if not this.headerFiles.contains header:
@@ -191,15 +196,17 @@ proc initBlock*(): TBlock =
     result.sections[i] = newRopeAppender()
 
 proc newProc*(prc: PSym, module: BModule): BProc =
-  new(result)
-  result.prc = prc
-  result.module = module
-  result.options = if prc != nil: prc.options
-                   else: module.config.options
-  result.blocks = @[initBlock()]
-  result.nestedTryStmts = @[]
-  result.finallySafePoints = @[]
-  result.sigConflicts = initCountTable[string]()
+  result = BProc(
+    prc: prc,
+    module: module,
+    optionsStack: if module.initProc != nil: module.initProc.optionsStack
+                  else: @[],
+    options: if prc != nil: prc.options
+             else: module.config.options,
+    blocks: @[initBlock()],
+    sigConflicts: initCountTable[string]())
+  if optQuirky in result.options:
+    result.flags = {nimErrorFlagDisabled}
 
 proc newModuleList*(g: ModuleGraph): BModuleList =
   BModuleList(typeInfoMarker: initTable[SigHash, tuple[str: Rope, owner: int32]](),
